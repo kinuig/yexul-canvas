@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YexuL Canvas</title>
+  <link rel="icon" href="/images/icon.png" type="image/png">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+  <!-- 顶部导航 -->
+  <header id="topbar">
+    <div class="brand">
+      <div class="brand-logo"><img src="/images/icon.png" alt="YexuL Canvas"></div>
+      <div class="brand-text">
+        <span class="brand-name">YexuL Canvas</span>
+        <span class="brand-sub">无限画布 · AI 生图工作台</span>
+      </div>
+      <span id="conn-chip" class="chip chip-warn" title="连接状态">未配置 API</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost" id="btn-zoom-reset" title="重置视图">⌂ 重置视图</button>
+      <button class="btn btn-ghost" id="btn-history" title="历史记录">🕘 历史<span id="history-count" class="badge" hidden></span></button>
+      <button class="btn btn-ghost" id="btn-cache" title="打开本地缓存文件夹">🗂 缓存</button>
+      <button class="btn btn-ghost" id="btn-upload" title="上传本地图片到画布">⬆ 上传图片</button>
+      <button class="btn btn-primary" id="btn-new-zone">＋ 新建生图区</button>
+      <button class="btn btn-ghost" id="btn-mj" title="新建 MJ 生图区（Midjourney 文生图 / Blend 图生图）">🎨 MJ生图</button>
+      <button class="btn btn-ghost" id="btn-chat" title="打开一个新的 GPT 对话窗口">💬 新建对话</button>
+      <div id="task-status" class="chip chip-ok" title="当前任务状态 · 点击查看日志">🟢 空闲</div>
+      <button class="btn btn-ghost" id="btn-settings">⚙ 设置</button>
+    </div>
+  </header>
+
+  <!-- 分区页签 -->
+  <div id="partition-bar"></div>
+
+  <!-- 画布舞台 -->
+  <main id="stage">
+    <div id="viewport">
+      <div id="canvas-root"></div>
+      <div id="empty-hint" hidden>
+        <div class="empty-hint-box">
+          <div class="empty-hint-title">这里是你的无限画布</div>
+          <div class="empty-hint-line">点右上角「＋ 新建生图区」创建生图区，或直接把本地图片拖进来</div>
+          <div class="empty-hint-line muted">滚轮缩放 · 按住空白处拖拽平移 · 按住空格拖动 · 双击图片可放大查看</div>
+        </div>
+      </div>
+    </div>
+    <div id="chat-layer"></div>
+    <div id="zoom-bar">
+      <button class="zoom-btn" id="zoom-out" title="缩小">−</button>
+      <span id="zoom-label">100%</span>
+      <button class="zoom-btn" id="zoom-in" title="放大">＋</button>
+      <button class="zoom-btn" id="zoom-fit" title="适合视图">⤢</button>
+    </div>
+  </main>
+
+  <!-- 历史记录侧栏 -->
+  <aside id="history-panel" hidden>
+    <div class="panel-head">
+      <span>🕘 生成历史</span>
+      <div class="panel-head-actions">
+        <button class="btn btn-mini" id="btn-history-clear">清空</button>
+        <button class="btn btn-mini btn-ghost" id="btn-history-close">✕</button>
+      </div>
+    </div>
+    <div id="history-list" class="panel-body"></div>
+  </aside>
+
+  <!-- 任务日志面板（双页签） -->
+  <div id="task-log-panel" hidden>
+    <div class="panel-head">
+      <div class="task-log-tabs">
+        <button class="task-log-tab on" data-tab="task">📋 任务记录</button>
+        <button class="task-log-tab" data-tab="server">🛠 服务日志<span id="server-log-count" class="badge" hidden></span></button>
+      </div>
+      <div class="panel-head-actions">
+        <button class="btn btn-mini" id="btn-task-log-copy" title="复制全部服务日志（可发给我排查）" hidden>📋 复制</button>
+        <button class="btn btn-mini" id="btn-task-log-clear">清空</button>
+        <button class="btn btn-mini btn-ghost" id="btn-task-log-close">✕</button>
+      </div>
+    </div>
+    <div id="task-log-view" class="task-log-list"></div>
+    <div id="server-log-view" class="task-log-list" hidden></div>
+  </div>
+
+  <!-- 选择模型弹窗（多选，未勾选的不出现在生图/对话下拉） -->
+  <div id="model-select-mask" hidden>
+    <div class="modal model-select-modal">
+      <div class="modal-head">
+        <span id="model-select-title">选择要使用的模型</span>
+        <button class="btn btn-mini btn-ghost" id="btn-model-select-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="model-select-section">
+          <div class="model-select-head">
+            <span>🖼 生图模型</span>
+            <div class="model-select-head-btns">
+              <button class="btn btn-mini" data-act="all-img">全选</button>
+              <button class="btn btn-mini btn-ghost" data-act="none-img">全不选</button>
+            </div>
+          </div>
+          <div id="ms-image-list" class="model-select-grid"></div>
+        </div>
+        <div class="model-select-section">
+          <div class="model-select-head">
+            <span>💬 对话模型</span>
+            <div class="model-select-head-btns">
+              <button class="btn btn-mini" data-act="all-chat">全选</button>
+              <button class="btn btn-mini btn-ghost" data-act="none-chat">全不选</button>
+            </div>
+          </div>
+          <div id="ms-chat-list" class="model-select-grid"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="field-hint" id="ms-hint">只显示勾选的模型，方便查找</span>
+        <div class="picker-foot-btns">
+          <button class="btn btn-ghost" id="btn-model-select-cancel">取消</button>
+          <button class="btn btn-primary" id="btn-model-select-save">保存选择</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div id="modal-mask" hidden>
+    <div class="modal" id="settings-modal">
+      <div class="modal-head">
+        <span>⚙ 设置</span>
+        <button class="btn btn-mini btn-ghost" id="btn-settings-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field">
+          <span class="field-label">API 提供商（可保存多个，随时切换）</span>
+          <div id="provider-list" class="provider-list"></div>
+        </div>
+        <div class="provider-form">
+          <div class="provider-form-row">
+            <label class="field">
+              <span class="field-label">名称</span>
+              <input type="text" id="prov-name" placeholder="例如 主账号 / 备用平台" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="field-label">Base URL（接口地址）</span>
+              <input type="text" id="prov-baseurl" placeholder="https://你的域名.com（自动补全 /v1）" autocomplete="off">
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label">API Key（令牌）</span>
+            <input type="password" id="prov-apikey" placeholder="sk-…" autocomplete="off">
+          </label>
+          <div class="provider-form-actions">
+            <button class="btn btn-primary" id="btn-prov-fetch">🔌 测试连接并拉取模型</button>
+            <button class="btn btn-ghost" id="btn-prov-clear">清空</button>
+          </div>
+          <span id="prov-result" class="field-hint"></span>
+        </div>
+        <div class="field" id="mj-config-section">
+          <span class="field-label">🎨 Midjourney API（独立配置，与当前提供商无关）</span>
+          <label class="field">
+            <span class="field-label">MJ 接口地址（Base URL）</span>
+            <input type="text" id="set-mj-base" placeholder="支持 MJ 的域名，如 https://your-mj-host.com（留空则用当前提供商地址）" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label">MJ API Key（令牌）</span>
+            <input type="password" id="set-mj-key" placeholder="留空则用当前提供商的 Key" autocomplete="off">
+          </label>
+          <span class="field-hint">MJ 生图区固定使用这里的地址与 Key，切换提供商不受影响；报 404/405 说明该地址不支持 Midjourney 接口</span>
+        </div>
+        <label class="field">
+          <span class="field-label">默认模型（生图）</span>
+          <select id="set-default-model"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">默认对话模型（GPT 对话窗口）</span>
+          <select id="set-chat-model"></select>
+          <span class="field-hint">新建对话窗口时默认使用的模型；选项 = 模型选择弹窗中勾选的对话模型，留空自动用勾选列表第一个</span>
+        </label>
+        <div class="field">
+          <span class="field-label">本地缓存目录</span>
+          <div class="cache-row">
+            <code id="set-cache-dir">—</code>
+            <button class="btn btn-mini" id="btn-cache-open">打开文件夹</button>
+          </div>
+          <span class="field-hint" id="set-cache-info">—</span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="field-hint">提供商配置保存在本机 data\providers.json，不会上传</span>
+        <button class="btn btn-primary" id="btn-settings-save">保存设置（默认模型 + MJ 配置）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片选择弹窗（支持多选） -->
+  <div id="picker-mask" hidden>
+    <div class="modal picker-modal">
+      <div class="modal-head">
+        <span id="picker-title">选择图片</span>
+        <button class="btn btn-mini btn-ghost" id="btn-picker-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="picker-actions">
+          <button class="btn btn-primary" id="btn-picker-upload">⬆ 上传本地图片</button>
+          <span class="field-hint">点击图片多选（画布中的图片都能选），也可上传新图</span>
+        </div>
+        <div id="picker-grid" class="picker-grid"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="field-hint" id="picker-selected-hint">已选 0 张</span>
+        <div class="picker-foot-btns">
+          <button class="btn btn-ghost" id="btn-picker-cancel">取消</button>
+          <button class="btn btn-primary" id="btn-picker-ok">插入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 保存提示词/消息 弹窗 -->
+  <div id="prompt-save-mask" hidden>
+    <div class="modal prompt-modal">
+      <div class="modal-head">
+        <span id="prompt-save-title">💾 保存内容</span>
+        <button class="btn btn-mini btn-ghost" id="btn-prompt-save-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">自定义名称</span>
+          <input type="text" id="prompt-save-name" placeholder="给这段内容起个名字，例如：产品图提示词" autocomplete="off">
+        </label>
+        <div class="field">
+          <span class="field-label">内容预览</span>
+          <div id="prompt-save-preview" class="prompt-preview"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="field-hint">同名会覆盖旧内容，保存在本机 data\prompts.json</span>
+        <div class="picker-foot-btns">
+          <button class="btn btn-ghost" id="btn-prompt-save-cancel">取消</button>
+          <button class="btn btn-primary" id="btn-prompt-save-ok">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 常用对话 / 提示词库 弹窗 -->
+  <div id="saved-mask" hidden>
+    <div class="modal saved-modal">
+      <div class="modal-head">
+        <span id="saved-title">⭐ 常用对话 / 提示词</span>
+        <button class="btn btn-mini btn-ghost" id="btn-saved-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="saved-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片查看器 -->
+  <div id="lightbox" hidden>
+    <div class="lightbox-top">
+      <span id="lightbox-info"></span>
+      <div>
+        <button class="btn btn-mini" id="btn-lb-ref">🎯 设为参考图</button>
+        <button class="btn btn-mini" id="btn-lb-download">⬇ 下载</button>
+        <button class="btn btn-mini btn-ghost" id="btn-lb-close">✕</button>
+      </div>
+    </div>
+    <div id="lightbox-stage"><img id="lightbox-img" alt="预览"></div>
+  </div>
+
+  <div id="toasts"></div>
+  <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/canvas.js"></script>
+  <script src="/js/nodes.js"></script>
+  <script src="/js/chat.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

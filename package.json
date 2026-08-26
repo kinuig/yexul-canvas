@@ -1,0 +1,13 @@
+{
+  "name": "yexul-canvas",
+  "version": "1.0.0",
+  "description": "YexuL Canvas · Windows 无限画布生图应用（gpt-best API · 本地缓存）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
