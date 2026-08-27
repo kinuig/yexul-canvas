@@ -870,6 +870,7 @@ const NodeFactory = {
       aperture: '',
       hd: false,
       advOpen: false,
+      raw: false,            // --raw 写实模式
       mjResults: [],         // 按任务分组：[{id, ts, label, prompt, files:[{url,file,thumb,buttons,taskId,promptEn}]}]
     }, data || {});
     /* 迁移：旧数据是平铺数组，包装成单个「任务」组 */
@@ -966,7 +967,7 @@ const NodeFactory = {
             <option value="LANDSCAPE">3:2 LANDSCAPE</option>
           </select>
         </div>
-        <button class="adv-toggle">⚙ 高级设置（镜头 / 光圈 / HD）</button>
+        <button class="adv-toggle">⚙ 高级设置（镜头 / 光圈 / HD / Raw）</button>
         <div class="z-adv" hidden>
           <div class="zone-row">
             <div>
@@ -980,6 +981,9 @@ const NodeFactory = {
           </div>
           <label class="checkbox-label">
             <input type="checkbox" class="m-hd"> HD 高清（--hd）
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" class="m-raw"> Raw 写实模式（--raw）
           </label>
         </div>
         <button class="gen-btn">🎨 提交 MJ 绘图</button>
@@ -1076,7 +1080,7 @@ const NodeFactory = {
     advToggle.addEventListener('click', () => {
       d.advOpen = !d.advOpen;
       adv.hidden = !d.advOpen;
-      advToggle.textContent = (d.advOpen ? '−' : '⚙') + ' 高级设置（镜头 / 光圈 / HD）';
+      advToggle.textContent = (d.advOpen ? '−' : '⚙') + ' 高级设置（镜头 / 光圈 / HD / Raw）';
     });
     const lensSel = q('.m-lens');
     this._fillSelect(lensSel, this.MJ_LENSES.map((v) => [v, v || '默认']), d.lens);
@@ -1085,6 +1089,10 @@ const NodeFactory = {
     this._fillSelect(apSel, this.MJ_APERTURES.map((v) => [v, v || '默认']), d.aperture);
     apSel.addEventListener('change', () => { d.aperture = apSel.value; Canvas._scheduleSave(); });
     q('.m-hd').addEventListener('change', (e) => { d.hd = e.target.checked; Canvas._scheduleSave(); });
+    q('.m-raw').addEventListener('change', (e) => { d.raw = e.target.checked; Canvas._scheduleSave(); });
+    /* 恢复勾选状态 */
+    q('.m-hd').checked = !!d.hd;
+    q('.m-raw').checked = !!d.raw;
 
     /* 参考图拖入 */
     const refsArea = q('.refs-area');
@@ -1165,6 +1173,7 @@ const NodeFactory = {
       version: d.version || '',
       quality: d.quality || '',
       hd: !!d.hd,
+      raw: !!d.raw,
       lens: d.lens || '',
       aperture: d.aperture || '',
       dimensions: d.dimensions,

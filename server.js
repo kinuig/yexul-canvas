@@ -1712,6 +1712,14 @@ async function handleApi(req, res, urlPath, query) {
       if (body.version) fullPrompt += ` --v ${String(body.version)}`;
       if (body.quality) fullPrompt += ` --q ${String(body.quality)}`;
       if (body.hd) fullPrompt += ' --hd';
+      /* --raw 写实模式：提示词里已含 --raw 时不重复添加（避免两个 raw 冲突） */
+      if (body.raw) {
+        if (/--raw\b/i.test(fullPrompt)) {
+          accessLog('MJ 提示词已包含 --raw，跳过重复添加');
+        } else {
+          fullPrompt += ' --raw';
+        }
+      }
       if (body.lens) fullPrompt += ` ${String(body.lens)}`;
       if (body.aperture) fullPrompt += ` ${String(body.aperture)}`;
 
