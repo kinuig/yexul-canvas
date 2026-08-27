@@ -138,6 +138,12 @@ input, textarea, select { font-family: var(--font); }
 #stage { position: fixed; inset: 94px 0 0 0; }
 #viewport { position: absolute; inset: 0; overflow: hidden; cursor: default; }
 #viewport.panning { cursor: grabbing; }
+#viewport.marqueeing { cursor: crosshair; user-select: none; }
+#marquee {
+  position: absolute; display: none; pointer-events: none; z-index: 60;
+  border: 1.5px dashed #8b7cff; background: rgba(124, 92, 255, 0.12);
+  border-radius: 4px;
+}
 #canvas-root {
   position: absolute; left: 0; top: 0; width: 0; height: 0;
   transform-origin: 0 0; will-change: transform;

@@ -12,6 +12,7 @@ const Canvas = {
   maxZoom: 4,
   nodes: [],               // {id, type, x, y, el, data}
   selectedId: null,
+  selectedIds: new Set(),  // 多选集合（框选 / 全选）
   els: {},
   _saveTimer: null,
   onEmptyClick: null,
@@ -25,11 +26,30 @@ const Canvas = {
 
     const vp = this.els.viewport;
 
+    /* 框选矩形 */
+    this.els.marquee = document.createElement('div');
+    this.els.marquee.id = 'marquee';
+    vp.appendChild(this.els.marquee);
+
     vp.addEventListener('pointerdown', (e) => this._onPointerDown(e));
     vp.addEventListener('pointermove', (e) => this._onPointerMove(e));
     window.addEventListener('pointerup', (e) => this._onPointerUp(e));
     vp.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
     window.addEventListener('resize', () => this.applyView());
+
+    /* 批量删除 / 全选 / 取消选择 */
+    window.addEventListener('keydown', (e) => {
+      if (e.target && e.target.closest && e.target.closest('input, textarea, select')) return;
+      const modalOpen = document.querySelector('#modal-mask:not([hidden]), #picker-mask:not([hidden]), #model-select-mask:not([hidden]), #lightbox:not([hidden])');
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (this.selectedIds.size) { e.preventDefault(); this.deleteSelection(); }
+      } else if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        this.selectAllImages();
+      } else if (e.key === 'Escape' && !modalOpen && this.selectedIds.size) {
+        this.select(null);
+      }
+    });
   },
 
   /* ---------- 坐标转换 ---------- */
@@ -123,13 +143,24 @@ const Canvas = {
     if (nodeEl) {
       const node = this.nodes.find((n) => n.el === nodeEl);
       if (node) {
-        this.select(node.id);
+        const inMulti = this.selectedIds.size > 1 && this.selectedIds.has(node.id);
+        if (!inMulti) this.select(node.id);
         const interactive = e.target.closest('input, textarea, select, button, a, .no-drag');
         const draggable = (node.type === 'zone' || node.type === 'mjzone')
           ? !!e.target.closest('.node-header')
           : !!e.target.closest('.img-wrap img, .img-cap');
         if (!interactive && draggable) {
-          this._drag = { kind: 'node', id: node.id, sx: e.clientX, sy: e.clientY, nodeX: node.x, nodeY: node.y, moved: false };
+          if (inMulti) {
+            /* 多选组整体拖动 */
+            const group = {};
+            for (const id of this.selectedIds) {
+              const n = this.getNode(id);
+              if (n) group[id] = { x: n.x, y: n.y };
+            }
+            this._drag = { kind: 'group', sx: e.clientX, sy: e.clientY, group, moved: false };
+          } else {
+            this._drag = { kind: 'node', id: node.id, sx: e.clientX, sy: e.clientY, nodeX: node.x, nodeY: node.y, moved: false };
+          }
           this.els.viewport.setPointerCapture(e.pointerId);
           e.preventDefault();
         }
@@ -137,7 +168,15 @@ const Canvas = {
       return;
     }
 
-    // 空白处：平移 + 取消选择
+    /* 空白处：Shift+拖拽 = 框选；否则平移 */
+    if (e.shiftKey) {
+      this._drag = { kind: 'marquee', sx: e.clientX, sy: e.clientY, moved: false };
+      this.els.viewport.classList.add('marqueeing');
+      this.els.viewport.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+
     this._drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, px: this.panX, py: this.panY, moved: false };
     this.els.viewport.classList.add('panning');
     this.els.viewport.setPointerCapture(e.pointerId);
@@ -154,6 +193,20 @@ const Canvas = {
       this.panX = d.px + dx;
       this.panY = d.py + dy;
       this.applyView();
+    } else if (d.kind === 'marquee') {
+      const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      const r = this.els.viewport.getBoundingClientRect();
+      const x1 = Math.min(d.sx, e.clientX) - r.left;
+      const y1 = Math.min(d.sy, e.clientY) - r.top;
+      const w = Math.abs(dx);
+      const h = Math.abs(dy);
+      const mq = this.els.marquee;
+      mq.style.display = 'block';
+      mq.style.left = x1 + 'px';
+      mq.style.top = y1 + 'px';
+      mq.style.width = w + 'px';
+      mq.style.height = h + 'px';
     } else if (d.kind === 'node') {
       const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
       if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
@@ -163,12 +216,67 @@ const Canvas = {
       node.y = d.nodeY + dy / this.zoom;
       this._placeNode(node);
       this._scheduleSave();
+    } else if (d.kind === 'group') {
+      const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      for (const [id, start] of Object.entries(d.group)) {
+        const n = this.getNode(id);
+        if (!n) continue;
+        n.x = start.x + dx / this.zoom;
+        n.y = start.y + dy / this.zoom;
+        this._placeNode(n);
+      }
+      this._scheduleSave();
     }
   },
 
-  _onPointerUp() {
+  _onPointerUp(e) {
+    const d = this._drag;
+    if (!d) return;
+    if (d.kind === 'marquee') {
+      this.els.marquee.style.display = 'none';
+      this.els.viewport.classList.remove('marqueeing');
+      if (d.moved) {
+        const a = this.screenToWorld(d.sx, d.sy);
+        const b = this.screenToWorld(e.clientX, e.clientY);
+        const x1 = Math.min(a.x, b.x), y1 = Math.min(a.y, b.y);
+        const x2 = Math.max(a.x, b.x), y2 = Math.max(a.y, b.y);
+        const ids = [];
+        for (const n of this.nodes) {
+          if (n.type !== 'image') continue;
+          const w = n.el.offsetWidth, h = n.el.offsetHeight;
+          if (n.x < x2 && n.x + w > x1 && n.y < y2 && n.y + h > y1) ids.push(n.id);
+        }
+        this.setSelection(ids);
+        if (App) App.toast(`已框选 ${ids.length} 张图片（拖动可整体移动，拖到生图区可批量设为参考图，Delete 删除）`, 'ok');
+      }
+      this._drag = null;
+      return;
+    }
+    if (d.kind === 'group') {
+      /* 整体拖到生图区上：批量设为参考图 */
+      if (d.moved && e) {
+        const w = this.screenToWorld(e.clientX, e.clientY);
+        const zone = this.nodes.find((n) =>
+          (n.type === 'zone' || n.type === 'mjzone') && !this.selectedIds.has(n.id)
+          && w.x >= n.x && w.x <= n.x + n.el.offsetWidth && w.y >= n.y && w.y <= n.y + n.el.offsetHeight);
+        if (zone) {
+          let added = 0;
+          for (const id of this.selectedIds) {
+            const n = this.getNode(id);
+            if (!n || n.type !== 'image' || !n.data.cacheId) continue;
+            if (!zone.data.refIds.includes(n.data.cacheId)) { zone.data.refIds.push(n.data.cacheId); added++; }
+          }
+          if (added) {
+            NodeFactory.renderRefs(zone);
+            this._scheduleSave();
+            if (App) App.toast(`已把 ${added} 张图设为「${zone.data.title || '生图区'}」的参考图`, 'ok');
+          }
+        }
+      }
+    }
     if (this._drag) {
-      this.els.viewport.classList.remove('panning');
+      this.els.viewport.classList.remove('panning', 'marqueeing');
       this._drag = null;
     }
   },
@@ -201,15 +309,49 @@ const Canvas = {
     if (i < 0) return;
     const [node] = this.nodes.splice(i, 1);
     node.el.remove();
-    if (this.selectedId === id) this.select(null);
+    this.selectedIds.delete(id);
+    if (this.selectedId === id) this.selectedId = null;
     this._updateHint();
     this._scheduleSave();
   },
 
   select(id) {
     this.selectedId = id;
-    for (const n of this.nodes) n.el.classList.toggle('selected', n.id === id);
+    this.selectedIds.clear();
+    if (id) this.selectedIds.add(id);
+    this._applySelectionClasses();
     if (this.onSelectionChange) this.onSelectionChange(id);
+  },
+
+  /** 批量设置选中（框选 / 全选结果） */
+  setSelection(ids) {
+    this.selectedIds = new Set(ids || []);
+    this.selectedId = this.selectedIds.size === 1 ? [...this.selectedIds][0] : null;
+    this._applySelectionClasses();
+    if (this.onSelectionChange) this.onSelectionChange(this.selectedId);
+  },
+
+  _applySelectionClasses() {
+    for (const n of this.nodes) n.el.classList.toggle('selected', this.selectedIds.has(n.id));
+  },
+
+  /** Delete：批量删除选中的图片节点 */
+  deleteSelection() {
+    const ids = [...this.selectedIds];
+    let removed = 0;
+    for (const id of ids) {
+      const n = this.getNode(id);
+      if (n && n.type === 'image') { this.removeNode(id); removed++; }
+    }
+    this.select(null);
+    if (App && removed) App.toast(`已删除 ${removed} 张图片`, 'ok');
+  },
+
+  /** Ctrl+A：全选画布上的图片节点 */
+  selectAllImages() {
+    const ids = this.nodes.filter((n) => n.type === 'image').map((n) => n.id);
+    this.setSelection(ids);
+    if (App) App.toast(`已全选 ${ids.length} 张图片`, 'ok');
   },
 
   _placeNode(node) {
@@ -251,6 +393,7 @@ const Canvas = {
     for (const n of this.nodes) n.el.remove();
     this.nodes = [];
     this.selectedId = null;
+    this.selectedIds.clear();
     this._updateHint();
   },
 
