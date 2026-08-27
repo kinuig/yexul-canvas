@@ -1321,20 +1321,24 @@ async function handleApi(req, res, urlPath, query) {
     /* 挂载 Skill（系统提示词）：放在最前，并过滤历史里残留的 system 角色 */
     const systemText = String(body.system || '').trim();
     const skillName = String(body.skillName || '').trim();
-    accessLog(`对话请求 · 模型=${model}${skillName ? ' · 带Skill「' + skillName + '」' : ' · 无Skill'} · 消息 ${messages.length} 条${systemText ? `（系统提示 ${systemText.length} 字）` : ''}`);
     if (systemText) upMessages.push({ role: 'system', content: systemText });
+    let imgCount = 0;
     for (const m of messages) {
       if (m.role === 'system') continue;
-      const text = String(m.content || '');
+      let text = String(m.content || '').trim();
       const refs = Array.isArray(m.images) && m.images.length ? await loadRefs(m.images) : [];
+      imgCount += refs.length;
       if (!refs.length) {
         upMessages.push({ role: m.role === 'assistant' || m.role === 'user' || m.role === 'system' ? m.role : 'user', content: text });
       } else {
+        /* 只发图没打字时补默认指令，避免平台丢弃空文本导致图片不被识别 */
+        if (!text) text = '请看这张图片';
         const parts = [{ type: 'text', text }];
         for (const im of refs) parts.push({ type: 'image_url', image_url: { url: im.dataUri, detail: 'high' } });
         upMessages.push({ role: m.role === 'assistant' || m.role === 'user' || m.role === 'system' ? m.role : 'user', content: parts });
       }
     }
+    accessLog(`对话请求 · 模型=${model}${skillName ? ' · 带Skill「' + skillName + '」' : ' · 无Skill'} · 消息 ${messages.length} 条 · 附图 ${imgCount} 张${systemText ? `（系统提示 ${systemText.length} 字）` : ''}`);
 
     const payload = { model, messages: upMessages, stream };
     if (body.temperature != null && Number.isFinite(Number(body.temperature))) {

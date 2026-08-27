@@ -294,10 +294,16 @@ const Chat = {
     q('.chat-close').addEventListener('click', () => this.remove(win.id));
     q('.chat-min').addEventListener('click', () => this.toggleMin(win));
     q('.chat-clear').addEventListener('click', () => {
-      if (confirm(`清空「${win.name}」的全部对话？`)) {
+      if (confirm(`清空「${win.name}」的全部对话？\n将同时清除上下文与未发送的图片附件，正在生成的回复也会停止。`)) {
+        /* 彻底清空上下文：消息 + 待发送附件 + 中断进行中的回复 */
+        try { win._abort && win._abort(); } catch { /* 忽略 */ }
+        win.streaming = false;
         win.messages = [];
+        win.attach = [];
         this.renderMessages(win);
+        this.renderAttach(win);
         this.persist();
+        App.toast('对话已清空（上下文与附件一并清除）', 'ok');
       }
     });
     /* 模型切换（用事件委托，模型下拉刷新后依然有效） */
