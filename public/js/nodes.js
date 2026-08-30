@@ -1122,7 +1122,14 @@ const NodeFactory = {
     });
 
     /* 提交 */
-    q('.gen-btn').addEventListener('click', () => this.mjGenerate(zone));
+    q('.gen-btn').addEventListener('click', () => {
+      /* 运行中点按钮 = 中断当前 MJ 任务（提交/排队/绘制/操作） */
+      if (zone._mjBusy) {
+        try { zone._mjAbort && zone._mjAbort(); } catch { /* 忽略 */ }
+        return;
+      }
+      this.mjGenerate(zone);
+    });
     prompt.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) this.mjGenerate(zone);
     });
@@ -1158,11 +1165,13 @@ const NodeFactory = {
     const el = zone.el.querySelector('.gen-status');
     const btn = zone.el.querySelector('.gen-btn');
     zone.data.status = { state, text };
+    zone._mjBusy = state === 'running';
     el.className = 'gen-status' + (state === 'err' ? ' err' : state === 'ok' ? ' ok' : '');
     el.textContent = text || '';
-    btn.disabled = state === 'running';
+    /* 运行中：按钮变成「停止」（可中断提交/排队/绘制/操作） */
+    btn.disabled = false;
     btn.innerHTML = state === 'running'
-      ? '<span class="spin"></span>MJ 绘制中…'
+      ? '<span class="spin"></span>⏹ 停止（中断当前任务）'
       : '🎨 提交 MJ 绘图';
   },
 
@@ -1201,11 +1210,15 @@ const NodeFactory = {
     clearInterval(zone._timer);
     zone._timer = setInterval(() => {
       const s = Math.floor((Date.now() - t0) / 1000);
-      this._setMjStatus(zone, 'running', `MJ 排队/绘制中… ${s}s${s > 90 ? '（MJ 出图较慢，请耐心等待）' : ''}`);
+      this._setMjStatus(zone, 'running', `MJ 排队/绘制中… ${s}s${s > 90 ? '（MJ 出图较慢，可点「停止」中断）' : ''}`);
     }, 1000);
 
+    /* 中断支持：停止按钮 → abort 请求，服务端随即停止轮询 */
+    const ac = new AbortController();
+    zone._mjAbort = () => ac.abort();
+
     try {
-      const res = await API.req('/api/mj/imagine', { method: 'POST', body: JSON.stringify(payload) });
+      const res = await API.req('/api/mj/imagine', { method: 'POST', body: JSON.stringify(payload), signal: ac.signal });
       clearInterval(zone._timer);
       /* 四宫格：平台 CDN 分块逐张回传（images 数组），整次任务归为一组 */
       const imgs = Array.isArray(res.images) && res.images.length ? res.images : (res.image ? [res.image] : []);
@@ -1222,6 +1235,12 @@ const NodeFactory = {
       App.refreshHistoryCount();
     } catch (e) {
       clearInterval(zone._timer);
+      if (e.name === 'AbortError') {
+        this._setMjStatus(zone, 'ok', '⏹ 已停止（任务中断，已出的图会留在历史记录里）');
+        App.logTask('done', `MJ 已停止 · ${d.taskType}`);
+        App.refreshHistoryCount();
+        return;
+      }
       this._setMjStatus(zone, 'err', `❌ ${e.message}`);
       App.logTask('error', `MJ 失败 · ${d.taskType} · ${e.message}`);
       if (/API Key|Base URL|鉴权/.test(e.message)) App.hintSettings();
@@ -1231,12 +1250,15 @@ const NodeFactory = {
 
   async mjRunAction(zone, item, btn) {
     const d = zone.data;
-    this._setMjStatus(zone, 'running', `执行操作中… ${btn.label || btn.customId}`);
+    this._setMjStatus(zone, 'running', `执行操作中… ${btn.label || btn.customId}（可点「停止」中断）`);
     App.logTask('start', `MJ 操作 · ${btn.label || btn.customId}`);
+    const ac = new AbortController();
+    zone._mjAbort = () => ac.abort();
     try {
       const res = await API.req('/api/mj/action', {
         method: 'POST',
         body: JSON.stringify({ taskId: item.taskId, customId: btn.customId, botType: d.botType, mode: d.mode, channel: d.channel }),
+        signal: ac.signal,
       });
       const imgs = Array.isArray(res.images) && res.images.length ? res.images : (res.image ? [res.image] : []);
       const label = `MJ·${btn.label || '操作'}`;
@@ -1252,6 +1274,11 @@ const NodeFactory = {
       Canvas._scheduleSave();
       App.logTask('done', `MJ 操作完成 · ${btn.label || btn.customId}`);
     } catch (e) {
+      if (e.name === 'AbortError') {
+        this._setMjStatus(zone, 'ok', '⏹ 已停止');
+        App.logTask('done', `MJ 操作已停止 · ${btn.label || btn.customId}`);
+        return;
+      }
       this._setMjStatus(zone, 'err', `❌ ${e.message}`);
       App.logTask('error', `MJ 操作失败 · ${e.message}`);
     }

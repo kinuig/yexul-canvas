@@ -1434,8 +1434,9 @@ async function handleApi(req, res, urlPath, query) {
     let done = false;
     let accText = '';
     const finish = () => { if (!done) { done = true; res.end(); } };
-    req.on('close', () => {
-      if (!done) { try { upRes.body.cancel(); } catch { /* ignore */ } finish(); }
+    /* res close = 连接真正断开（req close 在 Node 24 表示请求体读完，会误触发） */
+    res.on('close', () => {
+      if (!done && !res.writableEnded) { try { upRes.body.cancel(); } catch { /* ignore */ } finish(); }
     });
     (async () => {
       try {
@@ -1533,19 +1534,24 @@ async function handleApi(req, res, urlPath, query) {
     return seg ? `/mj${seg}/mj` : '/mj';
   };
 
-  /** 轮询 MJ 任务直到完成，返回任务对象（状态字段兼容 top-level / result / data 嵌套） */
-  async function pollMjTask(base, prefix, key, taskId) {
+  /** 轮询 MJ 任务直到完成，返回任务对象（状态字段兼容 top-level / result / data 嵌套）
+      客户端点「停止」断开连接时，externalSignal 触发中断 */
+  async function pollMjTask(base, prefix, key, taskId, externalSignal) {
     const t0 = Date.now();
     let modalCount = 0;
     let lastStatus = '';
     accessLog(`MJ 开始轮询任务 ${taskId}（${base}${prefix}/task/${taskId}/fetch）`);
     for (;;) {
+      if (externalSignal && externalSignal.aborted) {
+        accessLog(`MJ 任务 ${taskId} 被用户中断（停止按钮）`);
+        throw new Error('已停止');
+      }
       if (Date.now() - t0 > 600000) throw new Error('MJ 任务等待超时（10分钟）——任务可能仍在平台排队，可稍后在平台网站查看或再提交一次');
       await new Promise((r) => setTimeout(r, 3000));
       // 查询接口同样带重试：平台高峰 503 时不会立刻失败
       const { res, json } = await requestJsonWithRetry(`${base}${prefix}/task/${encodeURIComponent(taskId)}/fetch`, {
         headers: { Authorization: `Bearer ${key}` },
-      }, 30000, 2, `MJ 查询 ${taskId}`);
+      }, 30000, 2, `MJ 查询 ${taskId}`, externalSignal);
       if (!res.ok) {
         accessLog(`MJ 查询任务失败 HTTP ${res.status}`);
         throw new Error(upstreamErrorMessage(res, json, ''));
@@ -1569,7 +1575,7 @@ async function handleApi(req, res, urlPath, query) {
   }
 
   /** 提交 MJ 任务（imagine / blend），返回 {task} 或直接返回图片 */
-  async function mjSubmit({ base, prefix, key, taskType, prompt, botType, refs, dimensions }) {
+  async function mjSubmit({ base, prefix, key, taskType, prompt, botType, refs, dimensions }, externalSignal) {
     let url;
     let body;
     if (taskType === 'blend') {
@@ -1583,7 +1589,7 @@ async function handleApi(req, res, urlPath, query) {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }, 60000, 3, `MJ ${taskType}`);
+    }, 60000, 3, `MJ ${taskType}`, externalSignal);
 
     accessLog(`MJ 提交 ${taskType}（${url}）→ HTTP ${res.status}，code=${json && json.code}`);
     if (!res.ok) throw new Error(upstreamErrorMessage(res, json, ''));
@@ -1596,7 +1602,7 @@ async function handleApi(req, res, urlPath, query) {
     const taskId = json && json.result;
     if (taskId && typeof taskId === 'string') {
       accessLog(`MJ 提交成功，任务ID=${taskId}，开始等待结果…`);
-      const task = await pollMjTask(base, prefix, key, taskId);
+      const task = await pollMjTask(base, prefix, key, taskId, externalSignal);
       return { task, taskId };
     }
     // 某些平台 Blend 直接返回结果
@@ -1607,13 +1613,13 @@ async function handleApi(req, res, urlPath, query) {
   }
 
   /** MJ 动作（U/V/Reroll 等） */
-  async function mjAction({ base, prefix, key, taskId, customId, botType }) {
+  async function mjAction({ base, prefix, key, taskId, customId, botType }, externalSignal) {
     const url = `${base}${prefix}/submit/action`;
     const { res, json } = await requestJsonWithRetry(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ taskId, customId, botType: botType || 'MID_JOURNEY' }),
-    }, 60000, 3, 'MJ action');
+    }, 60000, 3, 'MJ action', externalSignal);
     accessLog(`MJ 操作提交（${url}，task=${taskId}，customId=${String(customId).slice(0, 50)}）→ HTTP ${res.status}，code=${json && json.code}${json && json.description ? '，' + json.description : ''}`);
     if (!res.ok) throw new Error(upstreamErrorMessage(res, json, ''));
     const code = json && json.code;
@@ -1622,7 +1628,7 @@ async function handleApi(req, res, urlPath, query) {
     }
     const newTaskId = json && json.result;
     if (!newTaskId || typeof newTaskId !== 'string') throw new Error('MJ 操作未返回任务 ID');
-    const task = await pollMjTask(base, prefix, key, newTaskId);
+    const task = await pollMjTask(base, prefix, key, newTaskId, externalSignal);
     return { task, taskId: newTaskId };
   }
 
@@ -1730,6 +1736,10 @@ async function handleApi(req, res, urlPath, query) {
   /* MJ 生图 / 图生图（imagine / blend） */
   if (api === '/api/mj/imagine' && req.method === 'POST') {
     const t0 = Date.now();
+    /* 客户端点「停止」断开连接 → 中断上游提交/轮询/下载
+       注意：用 res 的 close（连接真正断开）判断，req 的 close 在 Node 24 里表示“请求体读完”会误触发 */
+    const ac = new AbortController();
+    res.on('close', () => { if (!res.writableEnded) ac.abort(); });
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
       const prov = activeProvider();
@@ -1768,8 +1778,10 @@ async function handleApi(req, res, urlPath, query) {
       if (body.lens) fullPrompt += ` ${String(body.lens)}`;
       if (body.aperture) fullPrompt += ` ${String(body.aperture)}`;
 
-      const { task, taskId } = await mjSubmit({ base, prefix, key, taskType, prompt: fullPrompt, botType, refs, dimensions: body.dimensions });
+      const { task, taskId } = await mjSubmit({ base, prefix, key, taskType, prompt: fullPrompt, botType, refs, dimensions: body.dimensions }, ac.signal);
+      if (ac.signal.aborted) return;   // 用户已停止：不再下载/入库/回传
       const cached = await cacheMjTask(task, { taskType, taskId }, key);
+      if (ac.signal.aborted) return;
       addHistory({
         id: uid(), ts: Date.now(), ms: Date.now() - t0,
         model: `MJ·${taskType === 'blend' ? 'Blend' : 'Imagine'}${body.mode && body.mode !== 'default' ? `(${body.mode})` : ''}`,
@@ -1784,14 +1796,21 @@ async function handleApi(req, res, urlPath, query) {
         promptEn: cached[0] ? cached[0].promptEn : '',
       });
     } catch (e) {
+      if (ac.signal.aborted) {
+        accessLog(`MJ 生图已中断（用户点击停止）· ${String(e.message || e)}`);
+        return;   // 用户点「停止」导致的错误不再回报
+      }
       accessLog(`MJ 生图失败 · ${String(e.message || e)}`);
       addHistory({ id: uid(), ts: Date.now(), ms: Date.now() - t0, model: 'MJ', prompt: '', negative: '', size: '', mode: 'mj', refCount: 0, status: 'error', error: String(e.message || e), files: [] });
-      return sendJson(res, 500, { error: String(e.message || e) });
+      if (!res.destroyed) return sendJson(res, 500, { error: String(e.message || e) });
     }
   }
 
   /* MJ 动作（U/V/Reroll/Zoom 等） */
   if (api === '/api/mj/action' && req.method === 'POST') {
+    /* 客户端点「停止」断开连接 → 中断上游提交/轮询/下载（res close = 连接真正断开） */
+    const ac = new AbortController();
+    res.on('close', () => { if (!res.writableEnded) ac.abort(); });
     try {
       const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
       const prov = activeProvider();
@@ -1807,12 +1826,18 @@ async function handleApi(req, res, urlPath, query) {
         taskId: String(body.taskId),
         customId: String(body.customId),
         botType: body.botType === 'NIJI_JOURNEY' ? 'NIJI_JOURNEY' : 'MID_JOURNEY',
-      });
+      }, ac.signal);
+      if (ac.signal.aborted) return;   // 用户已停止
       const cached = await cacheMjTask(task, { taskType: 'action', taskId }, key);
+      if (ac.signal.aborted) return;
       return sendJson(res, 200, { ok: true, images: cached, image: cached[0] || null });
     } catch (e) {
+      if (ac.signal.aborted) {
+        accessLog(`MJ 操作已中断（用户点击停止）· ${String(e.message || e)}`);
+        return;   // 用户点「停止」导致的错误不再回报
+      }
       accessLog(`MJ 操作失败 · ${String(e.message || e)}`);
-      return sendJson(res, 500, { error: String(e.message || e) });
+      if (!res.destroyed) return sendJson(res, 500, { error: String(e.message || e) });
     }
   }
 
