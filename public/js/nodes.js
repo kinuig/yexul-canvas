@@ -36,32 +36,48 @@ const NodeFactory = {
     return this._models.find((m) => m.id === id) || null;
   },
 
-  /** 填充模型下拉（分区切换 / 提供商拉取模型后重建用） */
-  fillModelSelect(sel) {
+  /** 填充模型下拉；preferred（保存的默认模型/当前区模型）排在第一位并置顶显示 */
+  fillModelSelect(sel, preferred) {
     sel.innerHTML = '';
+    let moved = null;
     for (const g of (App.modelGroups || [])) {
       const og = document.createElement('optgroup');
       og.label = g.category;
+      let n = 0;
       for (const m of g.models) {
+        if (preferred && m.id === preferred) { moved = m; continue; }
         const o = document.createElement('option');
         o.value = m.id;
         o.textContent = m.name;
         og.appendChild(o);
+        n++;
       }
-      sel.appendChild(og);
+      if (n) sel.appendChild(og);   // 空分组不显示
+    }
+    if (preferred) {
+      const top = document.createElement('optgroup');
+      top.label = preferred === (App.config && App.config.defaultModel) ? '默认模型（已保存）' : '当前模型';
+      const o = document.createElement('option');
+      o.value = preferred;
+      o.textContent = moved ? moved.name : ((this.modelById(preferred) && this.modelById(preferred).name) || preferred);
+      top.appendChild(o);
+      sel.insertBefore(top, sel.firstChild);
     }
   },
 
-  /** 提供商切换 / 模型拉取后：重建所有生图区的模型下拉 */
+  /** 提供商切换 / 模型拉取后：重建所有生图区的模型下拉
+      保留规则：区模型仍在新列表里 → 保留；区模型是保存的默认模型 → 保留（置顶）；否则回退第一个 */
   rebuildZoneModelSelects() {
     for (const n of Canvas.nodes) {
       if (n.type !== 'zone' || !n.el) continue;
       const sel = n.el.querySelector('.z-model');
       if (!sel) continue;
       const prev = n.data.model;
-      this.fillModelSelect(sel);
-      const valid = this._models.some((m) => m.id === prev);
-      n.data.model = valid ? prev : (sel.options[0] ? sel.options[0].value : '');
+      const firstId = (App.modelGroups && App.modelGroups[0] && App.modelGroups[0].models && App.modelGroups[0].models[0])
+        ? App.modelGroups[0].models[0].id : '';
+      const keep = this._models.some((m) => m.id === prev) || prev === (App.config && App.config.defaultModel);
+      n.data.model = keep ? prev : firstId;
+      this.fillModelSelect(sel, keep ? prev : undefined);
       if (!sel.options.length) {
         const opt = document.createElement('option');
         opt.value = '';
@@ -274,18 +290,18 @@ const NodeFactory = {
       startTitleRename();
     });
 
-    /* 模型下拉 */
+    /* 模型下拉：保存的默认模型排在第一位并自动选中（不在提供商列表时也置顶显示） */
     const modelSel = q('.z-model');
-    this.fillModelSelect(modelSel);
-    /* 勾选列表里没有当前默认模型时，回退到第一个勾选模型 */
-    if (modelSel.value !== d.model) {
+    const isSavedDefault = !!d.model && d.model === (App.config && App.config.defaultModel);
+    this.fillModelSelect(modelSel, isSavedDefault ? d.model : undefined);
+    if (!modelSel.options.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '（暂无勾选模型，请到设置里勾选）';
+      modelSel.appendChild(opt);
+    }
+    if (!d.model || modelSel.value !== d.model) {
       d.model = modelSel.options[0] ? modelSel.options[0].value : '';
-      if (!d.model) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '（暂无勾选模型，请到设置里勾选）';
-        modelSel.appendChild(opt);
-      }
     }
     modelSel.value = d.model;
     modelSel.addEventListener('change', () => {

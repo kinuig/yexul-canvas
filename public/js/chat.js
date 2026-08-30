@@ -59,12 +59,12 @@ const Chat = {
     this.refreshModelSelects();
   },
 
-  /** 默认对话模型：优先已勾选列表（预设已清除） */
+  /** 默认对话模型：保存的默认模型永远优先；没保存时才用勾选列表第一个 */
   defaultModel() {
     const list = this._chatModels || [];
     const cfg = (App.config && App.config.defaultChatModel) || '';
-    if (cfg && list.includes(cfg)) return cfg;
-    return list[0] || cfg;
+    if (cfg) return cfg;             // 优先用户保存的默认模型（即使不在当前提供商勾选列表里）
+    return list[0] || '';
   },
 
   /** 模型控件 HTML：有勾选列表 → 下拉框（只含勾选模型，与生图区一致）；列表为空 → 可手动输入 */
@@ -76,7 +76,7 @@ const Chat = {
     }
     const opts = [...list];
     if (cur && !opts.includes(cur)) opts.push(cur);
-    const optsHtml = opts.map((m) => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('');
+    const optsHtml = opts.map((m) => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}${m === cur && !list.includes(cur) ? '（自定义）' : ''}</option>`).join('');
     return `<select class="chat-model" title="模型（只显示 ⚙ 设置 → 选择模型 中勾选的对话模型）">${optsHtml}</select>`;
   },
 
@@ -138,7 +138,8 @@ const Chat = {
       </div>
       <div class="chat-tools">
         ${this._modelControlHtml(win)}
-        <button class="chat-img" title="插入图片（画布中的图片可多选 / 本地上传）">🖼</button>
+        <button class="chat-img" title="插入画布中的图片（可多选）">🖼</button>
+        <button class="chat-file" title="上传本地图片（直接附加到本条消息，发送后自动清空）">📎</button>
         <button class="chat-clear" title="清空对话">🧹</button>
       </div>
       <div class="chat-skills" title="Skill：点击加载 / 卸载（作为对话系统提示词）"></div>
@@ -315,21 +316,46 @@ const Chat = {
       }
     });
 
-    /* 插入图片（画布多选 / 上传 / 拖入） */
+    /* 插入图片（画布多选 / 上传 / 拖入）：对话附图一律按平台视觉规范压缩到 2048px 内 */
     q('.chat-img').addEventListener('click', async () => {
       const ids = await App.pickImages('插入画布图片到对话（可多选）');
       if (ids && ids.length) {
-        const grs = App._activeIsGrs && App._activeIsGrs();
         for (const id of ids) {
-          /* GRS 平台请求体小：附图自动压缩后另存 */
-          const finalId = grs ? await App.compressCacheToUpload(id) : id;
+          const finalId = await App.compressCacheToUpload(id, 2048, 0.85);
           if (!win.attach.includes(finalId)) win.attach.push(finalId);
         }
         this.renderAttach(win);
         this.persist();
         this.focus(win);
-        App.toast(`已插入 ${ids.length} 张图片${grs ? '（GRS：已自动压缩）' : ''}，输入文字后点发送`, 'ok');
+        App.toast(`已插入 ${ids.length} 张图片（已按平台规范压缩到 2048px 内），输入文字后点发送`, 'ok');
       }
+    });
+
+    /* 📎 直接上传本地图片并附加（ChatGPT 风格：附件随本条消息发送一次） */
+    q('.chat-file').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.multiple = true;
+      input.onchange = async () => {
+        const files = [...input.files].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        let ok = 0;
+        for (const f of files) {
+          try {
+            let dataUrl = await fileToDataUrl(f);
+            /* 超过 1.5MB 的图按平台视觉规范压缩到 2048px 内（JPEG 85%） */
+            if (f.size > 1.5 * 1024 * 1024) dataUrl = await App.compressImage(dataUrl, 2048, 0.85);
+            const up = await API.upload(dataUrl);
+            if (!win.attach.includes(up.id)) win.attach.push(up.id);
+            ok++;
+          } catch (err) { App.toast(`上传失败（${f.name}）：${err.message}`, 'err'); }
+        }
+        this.renderAttach(win);
+        this.persist();
+        if (ok) App.toast(`已附加 ${ok} 张图片（已按平台规范压缩到 2048px 内），输入文字后点发送`, 'ok');
+      };
+      input.click();
     });
 
     /* 拖入图片 → 附加 */
@@ -337,18 +363,18 @@ const Chat = {
     el.addEventListener('drop', async (e) => {
       e.preventDefault();
       const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
-      const grs = App._activeIsGrs && App._activeIsGrs();
       for (const f of files) {
         try {
           let dataUrl = await fileToDataUrl(f);
-          if (grs) dataUrl = await App.compressImage(dataUrl, 2048, 0.9);
+          /* 超过 1.5MB 的图按平台视觉规范压缩到 2048px 内（JPEG 85%） */
+          if (f.size > 1.5 * 1024 * 1024) dataUrl = await App.compressImage(dataUrl, 2048, 0.85);
           const up = await API.upload(dataUrl);
-          win.attach.push(up.id);
+          if (!win.attach.includes(up.id)) win.attach.push(up.id);
         } catch (err) { App.toast(`上传失败：${err.message}`, 'err'); }
       }
       this.renderAttach(win);
       this.persist();
-      if (grs && files.length) App.toast('（GRS：附图已自动压缩）', 'ok');
+      if (files.length) App.toast(`已附加 ${files.length} 张图片（超过 1.5MB 的已自动压缩到 2048px 内）`, 'ok');
     });
 
     /* 发送 */
@@ -399,6 +425,11 @@ const Chat = {
       });
       box.appendChild(t);
     }
+    /* 提示：随本条消息发送一次，发送后自动清空，不会堆积 */
+    const hint = document.createElement('span');
+    hint.className = 'chat-attach-hint';
+    hint.textContent = `已附加 ${win.attach.length} 张（只随本条消息发送一次，之后的消息不再携带）`;
+    box.appendChild(hint);
   },
 
   /* ---------- 消息操作（复制 / 引用） ---------- */
@@ -518,10 +549,16 @@ const Chat = {
     win.messages.push(assistantMsg);
     win.streaming = true;
 
-    const history = win.messages.slice(-40).map((m) => ({
+    /* 图片只随它所属的那一条消息发送一次：历史消息一律不再携带图片（下一次对话不重复上传） */
+    const msgs = win.messages.slice(-40);
+    let lastImgIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].images && msgs[i].images.length) { lastImgIdx = i; break; }
+    }
+    const history = msgs.map((m, idx) => ({
       role: m.role,
       content: m.content,
-      images: m.images,
+      images: idx === lastImgIdx ? m.images : undefined,
     }));
 
     /* 挂载 Skill：把勾选 Skill 的内容作为系统提示词一并发送 */

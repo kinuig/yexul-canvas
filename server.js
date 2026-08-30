@@ -72,7 +72,10 @@ function accessLog(text) {
 }
 
 function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  try {
+    /* 容忍 UTF-8 BOM（用记事本等编辑 config 时可能带上） */
+    return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  }
   catch { return fallback; }
 }
 
@@ -935,20 +938,29 @@ async function handleApi(req, res, urlPath, query) {
 
   /* 上传本地图片 */
   if (api === '/api/upload' && req.method === 'POST') {
-    const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
-    const base64 = String(body.base64 || '');
-    if (!base64) return sendJson(res, 400, { error: '缺少图片数据' });
-    const m = base64.match(/^data:(image\/(png|jpeg|jpg|webp|gif));base64,(.+)$/s);
-    if (!m) return sendJson(res, 400, { error: '仅支持 PNG / JPG / WEBP / GIF 图片' });
-    const buf = Buffer.from(m[3], 'base64');
-    if (buf.length > MAX_UPLOAD_BYTES) return sendJson(res, 400, { error: '图片超过 25MB 限制' });
-    const ext = m[2] === 'jpeg' ? 'jpg' : m[2];
-    const name = `u_${uid()}.${ext}`;
-    await fsp.writeFile(path.join(UPLOAD_DIR, name), buf);
-    return sendJson(res, 200, {
-      ok: true, id: path.posix.join('uploads', name),
-      url: `/cache/uploads/${encodeURIComponent(name)}`, bytes: buf.length,
-    });
+    try {
+      const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+      const base64 = String(body.base64 || '');
+      if (!base64) { accessLog('图片上传失败 · 缺少图片数据'); return sendJson(res, 400, { error: '缺少图片数据' }); }
+      const m = base64.match(/^data:(image\/(png|jpeg|jpg|webp|gif));base64,(.+)$/s);
+      if (!m) { accessLog('图片上传失败 · 格式不支持'); return sendJson(res, 400, { error: '仅支持 PNG / JPG / WEBP / GIF 图片' }); }
+      const buf = Buffer.from(m[3], 'base64');
+      if (buf.length > MAX_UPLOAD_BYTES) {
+        accessLog(`图片上传失败 · 超过 ${Math.round(MAX_UPLOAD_BYTES / 1048576)}MB 限制（实际 ${(buf.length / 1048576).toFixed(1)}MB）`);
+        return sendJson(res, 400, { error: `图片超过 ${Math.round(MAX_UPLOAD_BYTES / 1048576)}MB 限制，请压缩后再上传` });
+      }
+      const ext = m[2] === 'jpeg' ? 'jpg' : m[2];
+      const name = `u_${uid()}.${ext}`;
+      await fsp.writeFile(path.join(UPLOAD_DIR, name), buf);
+      accessLog(`图片上传成功 · ${(buf.length / 1024).toFixed(0)}KB · ${path.posix.join('uploads', name)}`);
+      return sendJson(res, 200, {
+        ok: true, id: path.posix.join('uploads', name),
+        url: `/cache/uploads/${encodeURIComponent(name)}`, bytes: buf.length,
+      });
+    } catch (e) {
+      accessLog(`图片上传失败 · ${String(e.message || e)}`);
+      return sendJson(res, 400, { error: `上传失败：${String(e.message || e)}` });
+    }
   }
 
   /* 生图（核心） */
@@ -1372,17 +1384,27 @@ async function handleApi(req, res, urlPath, query) {
       }
     }
 
-    let upRes;
-    try {
-      upRes = await fetch(`${base}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(300000),
-      });
-    } catch (e) {
-      accessLog(`对话失败 · 模型=${model}${skillName ? ' · 带Skill「' + skillName + '」' : ''} · 上游请求失败：${e.message}`);
-      return sendJson(res, 502, { error: `上游请求失败：${e.message}` });
+    /* 上游请求带网络重试：平台连接偶发抖动（fetch failed）时自动重试 3 次 */
+    let upRes = null;
+    let netErr = null;
+    for (let attempt = 0; attempt < 3 && !upRes; attempt++) {
+      try {
+        upRes = await fetch(`${base}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(300000),
+        });
+      } catch (e) {
+        netErr = e;
+        accessLog(`对话上游请求失败（第 ${attempt + 1} 次）：${e.message}${attempt < 2 ? '，稍后自动重试' : ''}`);
+        if (attempt < 2) await new Promise((s) => setTimeout(s, 1500 * (attempt + 1)));
+      }
+    }
+    if (!upRes) {
+      const msg = `上游请求失败：${netErr ? netErr.message : '未知'}（已自动重试 3 次）`;
+      accessLog(`对话失败 · 模型=${model}${skillName ? ' · 带Skill「' + skillName + '」' : ''} · ${msg}`);
+      return sendJson(res, 502, { error: msg });
     }
 
     if (!upRes.ok) {
@@ -1398,10 +1420,11 @@ async function handleApi(req, res, urlPath, query) {
     if (!stream) {
       const json = await upRes.json().catch(() => null);
       const content = json?.choices?.[0]?.message?.content ?? '';
+      accessLog(`对话完成 · 模型=${model} · 回复开头：${String(content).slice(0, 90).replace(/\s+/g, ' ')}`);
       return sendJson(res, 200, { ok: true, content });
     }
 
-    /* 流式：直接转发上游 SSE */
+    /* 流式：直接转发上游 SSE，并记录回复开头便于排查 */
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
@@ -1409,6 +1432,7 @@ async function handleApi(req, res, urlPath, query) {
       'X-Accel-Buffering': 'no',
     });
     let done = false;
+    let accText = '';
     const finish = () => { if (!done) { done = true; res.end(); } };
     req.on('close', () => {
       if (!done) { try { upRes.body.cancel(); } catch { /* ignore */ } finish(); }
@@ -1416,16 +1440,33 @@ async function handleApi(req, res, urlPath, query) {
     (async () => {
       try {
         const reader = upRes.body.getReader();
+        const dec = new TextDecoder();
         for (;;) {
           const { done: d, value } = await reader.read();
           if (d) break;
-          if (value && value.length && !done) res.write(Buffer.from(value));
+          if (value && value.length && !done) {
+            /* 顺带解析 content 增量，仅用于日志 */
+            try {
+              const chunk = dec.decode(value, { stream: true });
+              for (const line of chunk.split('\n')) {
+                const t = line.trim();
+                if (!t.startsWith('data:')) continue;
+                const p = t.slice(5).trim();
+                if (!p || p === '[DONE]') continue;
+                const j = JSON.parse(p);
+                const delta = j.choices?.[0]?.delta?.content || j.choices?.[0]?.message?.content || '';
+                if (delta) accText += delta;
+              }
+            } catch { /* 日志解析失败忽略 */ }
+            res.write(Buffer.from(value));
+          }
         }
       } catch (e) {
         if (!done) {
           try { res.write(`data: ${JSON.stringify({ error: String(e.message || e) })}\n\n`); } catch { /* ignore */ }
         }
       }
+      accessLog(`对话完成 · 模型=${model} · 回复开头：${accText.slice(0, 90).replace(/\s+/g, ' ')}`);
       finish();
     })();
     return undefined;

@@ -822,10 +822,10 @@ const App = {
     });
   },
 
-  /** 压缩缓存图片并另存为新上传（GRS 等小请求体平台用），返回新 id；失败返回原 id */
-  async compressCacheToUpload(cacheId) {
+  /** 压缩缓存图片并另存为新上传，返回新 id；失败返回原 id（maxSide=长边上限，quality=JPEG 质量） */
+  async compressCacheToUpload(cacheId, maxSide = 2048, quality = 0.9) {
     try {
-      const dataUrl = await this.compressImage(`/cache/${encodeURI(cacheId)}`, 2048, 0.9);
+      const dataUrl = await this.compressImage(`/cache/${encodeURI(cacheId)}`, maxSide, quality);
       const up = await API.upload(dataUrl);
       return up && up.id ? up.id : cacheId;
     } catch { return cacheId; }
@@ -898,18 +898,8 @@ const App = {
     document.getElementById('set-mj-base').value = cfg.mjBaseUrl || '';
     document.getElementById('set-mj-key').value = cfg.mjApiKey || '';
     const sel = document.getElementById('set-default-model');
-    sel.innerHTML = '';
-    for (const g of this.modelGroups) {
-      const og = document.createElement('optgroup');
-      og.label = g.category;
-      for (const m of g.models) {
-        const o = document.createElement('option');
-        o.value = m.id;
-        o.textContent = m.name;
-        og.appendChild(o);
-      }
-      sel.appendChild(og);
-    }
+    /* 保存的默认模型排在第一位（不在当前提供商列表时置顶标注「默认模型（已保存）」） */
+    NodeFactory.fillModelSelect(sel, cfg.defaultModel || '');
     sel.value = cfg.defaultModel || this.defaultModel;
     this.renderProviders();
   },
@@ -930,6 +920,12 @@ const App = {
       await API.configSet({ defaultModel, defaultChatModel, mjBaseUrl, mjApiKey });
       this.config = { ...this.config, defaultModel, defaultChatModel, mjBaseUrl, mjApiKey };
       this.defaultModel = defaultModel;
+      /* 保存后：默认生图模型置顶显示在设置下拉第一位 */
+      const sel = document.getElementById('set-default-model');
+      if (sel && defaultModel) {
+        NodeFactory.fillModelSelect(sel, defaultModel);
+        sel.value = defaultModel;
+      }
       this.toast('设置已保存 ✅（含 MJ 独立配置）', 'ok');
     } catch (e) {
       this.toast(`保存失败：${e.message}`, 'err');
@@ -1094,19 +1090,10 @@ const App = {
       const sel = document.getElementById('set-default-model');
       if (sel) {
         const cur = sel.value;
-        sel.innerHTML = '';
-        for (const g of this.modelGroups) {
-          const og = document.createElement('optgroup');
-          og.label = g.category;
-          for (const m of g.models) {
-            const o = document.createElement('option');
-            o.value = m.id;
-            o.textContent = m.name;
-            og.appendChild(o);
-          }
-          sel.appendChild(og);
-        }
-        sel.value = this.modelGroups.some((g) => g.models.some((m) => m.id === cur)) ? cur : (this.config.defaultModel || 'gpt-image-1');
+        const inList = this.modelGroups.some((g) => g.models.some((m) => m.id === cur));
+        const preferred = (cur && inList) ? cur : (this.config.defaultModel || '');
+        NodeFactory.fillModelSelect(sel, preferred);
+        sel.value = preferred || (this.modelGroups[0] && this.modelGroups[0].models[0] ? this.modelGroups[0].models[0].id : '');
       }
     } catch { /* 忽略 */ }
   },
