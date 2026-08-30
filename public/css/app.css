@@ -709,11 +709,6 @@ input, textarea, select { font-family: var(--font); }
 }
 .chat-tools input:focus, .chat-tools select:focus { border-color: var(--accent); }
 .chat-tools select option { background: var(--panel-2); color: var(--text); }
-/* 上下文按钮：宽度自适应，文字完整可见（不被 28px 通用按钮样式压扁） */
-.chat-tools .chat-ctx {
-  width: auto; height: 28px; padding: 0 10px;
-  font-size: 12px; color: var(--text); white-space: nowrap;
-}
 
 /* Skill 加载栏 */
 .chat-skills {
@@ -794,13 +789,6 @@ input, textarea, select { font-family: var(--font); }
 .chat-send:hover { filter: brightness(1.12); }
 .chat-send.stop { background: var(--err); animation: pulse-err 1.2s ease-in-out infinite; }
 @keyframes pulse-err { 50% { opacity: 0.65; } }
-.chat-ctx {
-  font-size: 12px; padding: 6px 10px;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--bg); color: var(--text);
-  cursor: pointer; white-space: nowrap;
-}
-.chat-ctx.off { color: var(--warn); border-color: rgba(251, 191, 36, 0.55); }
 .chat-resize {
   position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize;
 }
@@ -855,42 +843,6 @@ input, textarea, select { font-family: var(--font); }
 .chat-bubble-acts button:hover { background: rgba(124, 92, 255, 0.85); }
 .chat-bubble.err { padding-bottom: 9px; }
 .chat-bubble.streaming { padding-bottom: 9px; }
-
-/* ---------- 新建对话：上下文模式选择框 ---------- */
-.chat-ctx-choice-mask {
-  position: fixed; inset: 0; z-index: 400;
-  background: rgba(5, 8, 14, 0.6);
-  display: flex; align-items: center; justify-content: center;
-  animation: chat-in 0.15s ease;
-}
-.chat-ctx-choice-card {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-  padding: 20px; width: 360px; max-width: 92vw;
-  display: flex; flex-direction: column; gap: 10px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
-}
-.ccc-title { font-size: 16px; font-weight: 700; }
-.ccc-sub { font-size: 12px; color: var(--muted); line-height: 1.6; }
-.ccc-btn {
-  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-  border-radius: 10px; padding: 12px 14px; cursor: pointer; text-align: left;
-  font-size: 14px; font-weight: 600;
-}
-.ccc-btn span {
-  display: block; font-size: 11.5px; color: var(--muted); margin-top: 4px; font-weight: 400; line-height: 1.6;
-}
-.ccc-btn:hover { border-color: var(--accent); }
-.ccc-btn.ccc-on { border-color: var(--accent); background: rgba(124, 92, 255, 0.12); }
-.ccc-remember {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--muted); cursor: pointer; user-select: none;
-}
-.ccc-remember input { accent-color: var(--accent); }
-.ccc-cancel {
-  border: none; background: none; color: var(--muted);
-  padding: 8px; cursor: pointer; font-size: 13px; border-radius: 8px;
-}
-.ccc-cancel:hover { color: var(--text); background: var(--bg-soft); }
 
 @media (max-width: 900px) {
   .brand-sub { display: none; }

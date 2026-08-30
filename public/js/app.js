@@ -341,9 +341,8 @@ const App = {
       this.toast(`已新建「${z.data.title}」，模式与参数参照 MJ 绘图插件`, 'ok');
     });
     document.getElementById('btn-chat').addEventListener('click', () => {
-      /* 新建对话：先选上下文模式（开启 / 不开启，可记住选择） */
-      if (Chat.createWithChoice) Chat.createWithChoice();
-      else Chat.create();
+      const win = Chat.create();
+      this.toast(`已打开「${win.name}」，双击标题可重命名`, 'ok');
     });
     document.getElementById('btn-upload').addEventListener('click', () => this._openFilePicker());
     document.getElementById('file-input').addEventListener('change', (e) => {

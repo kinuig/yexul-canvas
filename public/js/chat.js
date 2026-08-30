@@ -41,40 +41,13 @@ const Chat = {
         ? `${s.name}\n${s.description}\n（点击${win.skill === s.name ? '卸载' : '加载'}，作为对话系统提示词）`
         : `${s.name}（点击${win.skill === s.name ? '卸载' : '加载'}）`;
       b.addEventListener('click', () => {
-        const prev = win.skill;
         win.skill = win.skill === s.name ? '' : s.name;
-        let note = '';
-        /* Midjourney提示词优化 系列 Skill：加载时自动关闭上下文（只发本条消息）；离开时恢复 */
-        const isMj = (n) => !!n && n.startsWith('Midjourney提示词优化');
-        if (isMj(win.skill)) {
-          if (win.context) {
-            win.context = false;
-            win._ctxPrev = true;
-            note = '（已自动关闭上下文：只发送本条消息，可用 🔗/⛓ 按钮随时切换）';
-          }
-        } else if (isMj(prev) && win._ctxPrev) {
-          win.context = true;
-          win._ctxPrev = undefined;
-          note = '（已恢复带上下文）';
-        }
         this._renderSkills(win);
-        this._updateContextBtn(win);
         this.persist();
-        App.toast(win.skill ? `已加载 Skill「${win.skill}」${note}` : `已卸载 Skill「${prev}」${note}`, 'ok');
+        App.toast(win.skill ? `已加载 Skill「${s.name}」` : `已卸载 Skill「${s.name}」`, 'ok');
       });
       bar.appendChild(b);
     }
-  },
-
-  /** 上下文按钮状态（🔗 带上下文 / ⛓ 无上下文） */
-  _updateContextBtn(win) {
-    const b = win.el && win.el.querySelector('.chat-ctx');
-    if (!b) return;
-    b.classList.toggle('off', !win.context);
-    b.textContent = win.context ? '🔗 上下文' : '⛓ 无上下文';
-    b.title = win.context
-      ? '带上下文：发送最近 40 条历史给模型。点击切换为「只发送本条消息」'
-      : '无上下文：只发送本条消息（与当前 Skill）。点击切换为「带上下文」';
   },
 
   async _loadModels() {
@@ -139,7 +112,6 @@ const Chat = {
       name: d.name || `对话 ${this._count++}`,
       model: d.model || this.defaultModel(),
       skill: typeof d.skill === 'string' ? d.skill : '',
-      context: d.context !== false,   // 是否带上下文（默认带；Midjourney提示词优化 Skill 会自动关）
       messages: Array.isArray(d.messages) ? d.messages.slice(-200) : [],
       attach: Array.isArray(d.attach) ? d.attach : [],
       wnd: Object.assign({ x: 140 + (this.windows.length % 5) * 46, y: 140 + (this.windows.length % 5) * 36, w: 430, h: 560 }, d.wnd || {}),
@@ -166,7 +138,6 @@ const Chat = {
       </div>
       <div class="chat-tools">
         ${this._modelControlHtml(win)}
-        <button class="chat-ctx" title="上下文开关">🔗 上下文</button>
         <button class="chat-img" title="插入画布中的图片（可多选）">🖼</button>
         <button class="chat-file" title="上传本地图片（直接附加到本条消息，发送后自动清空）">📎</button>
         <button class="chat-clear" title="清空对话">🧹</button>
@@ -189,7 +160,6 @@ const Chat = {
     this.layer.appendChild(el);
     this._wire(win);
     this._renderSkills(win);
-    this._updateContextBtn(win);
     this.renderMessages(win, true);
     this.renderAttach(win);
     if (!silent) this.persist();
@@ -206,38 +176,6 @@ const Chat = {
     this.windows.splice(i, 1);
     this.persist();
     if (!this.windows.length) this.create();
-  },
-
-  /** 新建对话（带上下文模式选择）：
-      弹出「开启上下文 / 不开启上下文」选择框；勾选「记住」后下次直接按记住的模式新建 */
-  createWithChoice() {
-    const remembered = localStorage.getItem('yc_chat_ctx_default');
-    if (remembered === 'on') return this.create({ context: true });
-    if (remembered === 'off') return this.create({ context: false });
-
-    const mask = document.createElement('div');
-    mask.className = 'chat-ctx-choice-mask';
-    mask.innerHTML = `
-      <div class="chat-ctx-choice-card">
-        <div class="ccc-title">新建对话 · 上下文模式</div>
-        <div class="ccc-sub">决定这次对话是否携带之前的聊天记录（每个窗口创建后仍可用 🔗/⛓ 按钮随时切换）</div>
-        <button class="ccc-btn ccc-on">🔗 开启上下文<span>发送最近 40 条历史给模型，适合连续聊天、追问修改</span></button>
-        <button class="ccc-btn ccc-off">⛓ 不开启上下文<span>只发送本条消息（与当前 Skill），适合提示词优化等单次任务</span></button>
-        <label class="ccc-remember"><input type="checkbox" id="ccc-remember"> 记住我的选择，以后直接新建</label>
-        <button class="ccc-cancel">取消</button>
-      </div>`;
-    document.body.appendChild(mask);
-    const done = (context) => {
-      const remember = mask.querySelector('#ccc-remember').checked;
-      if (remember) localStorage.setItem('yc_chat_ctx_default', context ? 'on' : 'off');
-      mask.remove();
-      const win = this.create({ context });
-      if (App && App.toast) App.toast(`已打开「${win.name}」${context ? '（🔗 带上下文）' : '（⛓ 无上下文）'}，双击标题可重命名`, 'ok');
-    };
-    mask.querySelector('.ccc-on').addEventListener('click', () => done(true));
-    mask.querySelector('.ccc-off').addEventListener('click', () => done(false));
-    mask.querySelector('.ccc-cancel').addEventListener('click', () => mask.remove());
-    mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
   },
 
   focus(win) {
@@ -376,16 +314,6 @@ const Chat = {
         win.model = t.value.trim();
         this.persist();
       }
-    });
-
-    /* 🔗/⛓ 上下文开关：带上下文（发最近 40 条）或只发本条消息 */
-    q('.chat-ctx').addEventListener('click', () => {
-      win.context = !win.context;
-      this._updateContextBtn(win);
-      this.persist();
-      App.toast(win.context
-        ? '已开启上下文：发送最近 40 条历史给模型'
-        : '已关闭上下文：只发送本条消息（Midjourney提示词优化 Skill 默认就是这种模式）', 'ok');
     });
 
     /* 插入图片（画布多选 / 上传 / 拖入）：对话附图一律按平台视觉规范压缩到 2048px 内 */
@@ -637,18 +565,11 @@ const Chat = {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i].images && msgs[i].images.length) { lastImgIdx = i; break; }
     }
-    /* 上下文开关：开启 → 最近 40 条；关闭 → 只发本条消息（Midjourney提示词优化等 Skill 自动关闭） */
-    const history = win.context
-      ? msgs.map((m, idx) => ({
-        role: m.role,
-        content: m.content,
-        images: idx === lastImgIdx ? m.images : undefined,
-      }))
-      : msgs.slice(-1).map((m) => ({
-        role: m.role,
-        content: m.content,
-        images: m.images && m.images.length ? m.images : undefined,
-      }));
+    const history = msgs.map((m, idx) => ({
+      role: m.role,
+      content: m.content,
+      images: idx === lastImgIdx ? m.images : undefined,
+    }));
 
     /* 挂载 Skill：把勾选 Skill 的内容作为系统提示词一并发送 */
     let systemText = '';
@@ -666,7 +587,7 @@ const Chat = {
     const sendBtn = win.el.querySelector('.chat-send');
     if (sendBtn) { sendBtn.textContent = '停止'; sendBtn.classList.add('stop'); }
 
-    App.logTask('start', `对话 · ${win.model}${skillName ? ' · Skill「' + skillName + '」' : ''} · ${win.context ? '带上下文' : '无上下文'} · 「${text.slice(0, 30)}${text.length > 30 ? '…' : ''}」`);
+    App.logTask('start', `对话 · ${win.model}${skillName ? ' · Skill「' + skillName + '」' : ''} · 「${text.slice(0, 30)}${text.length > 30 ? '…' : ''}」`);
 
     try {
       const res = await fetch('/api/chat', {
@@ -745,7 +666,7 @@ const Chat = {
         method: 'POST',
         body: JSON.stringify({
           windows: this.windows.map((w) => ({
-            id: w.id, name: w.name, model: w.model, skill: w.skill || '', context: w.context !== false,
+            id: w.id, name: w.name, model: w.model, skill: w.skill || '',
             messages: w.messages.map((m) => ({ role: m.role, content: m.content, images: m.images })).slice(-200),
             attach: w.attach, wnd: w.wnd, min: w.min,
           })),
